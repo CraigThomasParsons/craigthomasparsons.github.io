@@ -1,0 +1,97 @@
+body {
+    display: flex;
+    min-height: 100vh;
+    flex-direction: column;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    background-image: url('../assets/wc1-map-base-mirror.png');
+}
+
+main {
+    flex: 1 0 auto;
+}
+footer {
+    padding-top:0px;
+    z-index: 5;
+}
+.footer {
+    position: fixed;
+    left: 0;
+    bottom: 0;
+    width: 100%;
+    text-align: center;
+    max-height: 17.5px;
+    padding-top:0px;
+}
+
+html {
+    background-color: #333333;
+}
+
+.background {
+    background-image: url('../assets/wc1-map-base.png');
+}
+
+#main {
+    height: 1024px;
+    width: 1024px;
+}
+
+#testSelectedIndicator {
+    background-image: url('../assets/wc1-selector-outline.png');
+    height: 16px;
+    width: 16px;
+    position: absolute;
+    top: 800px;
+    left: 256px;
+}
+
+#peasant1 {
+    top: 48px;
+    left: 720px;
+}
+
+#peasant2 {
+    top: 800px;
+    left: 240px;
+}
+
+#peasant3 {
+    top: 800px;
+    left: 256px;
+}
+
+#selectIndicator{
+    background-color: rgba(15, 255, 15, 0.4);
+    opacity:0.4;
+    border: 1px dotted rgb(15, 182, 15);
+    z-index: 3;
+    position: absolute;
+    display:none;
+}
+
+.unitOutlined {
+    z-index: 4;
+    background-image: url('../assets/wc1-selector-outline.png');
+    height: 16px;
+    width: 16px;
+    position: absolute;
+}
+
+.unitSelected {
+    /**
+    Didn't like this method, it didn't look right.
+    z-index: 4;
+    border: 1px solid rgb(6,167,6) */
+    /* This is so adding a border doesn't move the image */
+    /*
+    margin: -1px;
+    **/
+}
+
+.peasant {
+    z-index: 3;
+    background-image: url('../assets/wc1-human-standing.png');
+    height: 16px;
+    width: 16px;
+    position: absolute;
+}
