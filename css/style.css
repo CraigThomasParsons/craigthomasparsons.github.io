@@ -9,19 +9,6 @@ body {
 main {
     flex: 1 0 auto;
 }
-footer {
-    padding-top:0px;
-    z-index: 5;
-}
-.footer {
-    position: fixed;
-    left: 0;
-    bottom: 0;
-    width: 100%;
-    text-align: center;
-    max-height: 17.5px;
-    padding-top:0px;
-}
 
 html {
     background-color: #333333;
@@ -90,8 +77,19 @@ html {
 
 .peasant {
     z-index: 3;
-    background-image: url('../assets/wc1-human-standing.png');
+    background-image: url('../assets/sprites/peasant_sheet.png');
+    /* The full 480-px-wide sheet rendered at half scale, so each 32x32
+       sprite shows up at the 16x16 tile size. */
+    background-size: 240px 240px;
+    background-repeat: no-repeat;
+    background-position: 0 0;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    image-rendering: crisp-edges;
     height: 16px;
     width: 16px;
     position: absolute;
+    /* Keep transforms (used for left-facing flip) anchored to the centre
+       so the foot stays on the tile when mirrored. */
+    transform-origin: 50% 50%;
 }

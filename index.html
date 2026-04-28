@@ -17,6 +17,8 @@
         <script src="js/astar/astar.js"></script>
         <link rel="stylesheet" href="css/style.css">
         <link rel="stylesheet" href="css/grid.css">
+        <link rel="stylesheet" href="css/building.css">
+        <link rel="stylesheet" href="css/hud.css">
         <!--Import Google Icon Font-->
         <link href="https://fonts.googleapis.com/icon?family=Material+Icons" rel="stylesheet">
         <!--Import materialize.css-->
@@ -62,12 +64,27 @@
                 </div>
             </div>
         </main>
-        <footer class="footer page-footer grey darken-4 valign-wrapper">
-            <a style="display:none" class="waves-effect waves-light btn-small grey darken-3" id="btnDoSomething">Do Something</a>
+        <div id="minimap-frame" class="hud-minimap-frame">
+            <canvas id="minimap" width="140" height="140"></canvas>
+        </div>
+
+        <footer class="hud-bottom">
+            <div class="hud-bottom-section hud-bottom-selection">
+                <span class="hud-bottom-label">Selected:</span>
+                <span id="hud-selection-name">No selection</span>
+                <span id="hud-selection-stats" class="hud-selection-stats"></span>
+            </div>
+            <div class="hud-bottom-section hud-bottom-status">
+                <span class="hud-bottom-label">Status:</span>
+                <span id="hud-status">Welcome, commander.</span>
+            </div>
         </footer>
 
          <!-- JavaScript at end of body for optimized loading -->
         <script type="text/javascript" src="js/materialize.min.js"></script>
+
+         <!-- Unit-vs-unit collision tracking (consulted by moveUnit) -->
+        <script src="script/collision.js"></script>
 
          <!--The file for generic functions until I can better organize -->
         <script src="script/script.js" async defer></script>
@@ -77,9 +94,25 @@
 
         <!-- Code to display a grid and manage path finding and movement -->
         <script src="script/grid.js"></script>
+
+        <!-- HUD: top resource bar, bottom status / minimap. -->
+        <script src="script/resources.js"></script>
+        <script src="script/hud.js"></script>
+        <script src="script/minimap.js"></script>
+
+        <!-- Building placement system (toolbar + ghost preview + construction) -->
+        <script src="script/building.js"></script>
+
+        <!-- Gold harvesting (peasants → mine → town hall loop) -->
+        <script src="script/harvest.js"></script>
+
+        <!-- Peasant walking animation driven by the spriters-resource sheet -->
+        <script src="script/sprite.js"></script>
         <script>
             $(document).ready(function() {
-
+                if (window.RTS && window.RTS.Sprite) {
+                    window.RTS.Sprite.initAll();
+                }
             });
         </script>
     </body>

@@ -157,6 +157,11 @@ $(function() {
 
     var grid = new GraphSearch($grid, options, astar.search);
 
+    // Expose the grid search so the building system can update walls
+    // when buildings are placed/removed.
+    window.RTS = window.RTS || {};
+    window.RTS.gridSearch = grid;
+
     $displayGrid.change(function() {
         grid.setOption({display: $(this).is(":checked")});
     });
@@ -246,6 +251,11 @@ GraphSearch.prototype.initialize = function() {
                 // toggle grid on and off.
                 break;
             case 3:
+                // If we're placing a building, the right-click is consumed
+                // by the building system (it cancels placement). Don't path.
+                if (window.RTS && window.RTS.Building && window.RTS.Building.isPlacing()) {
+                    break;
+                }
                 let paths = [];
                 let moves = [];
                 // Find intersecting grid_items with units with class unitSelected.
@@ -255,7 +265,61 @@ GraphSearch.prototype.initialize = function() {
                 gridItems.forEach(gridItem => {
                     gridItem.classList.remove('start');
                 });
-                units.forEach(currentUnit => {
+
+                const clickedRow = parseInt($(this).attr('x'));
+                const clickedCol = parseInt($(this).attr('y'));
+
+                // Visualize the click target.
+                self.$cells.removeClass(css.finish);
+                $(this).addClass(css.finish);
+
+                // Build a set of selected unit IDs so we don't treat them
+                // as obstacles when picking spread destinations — they're
+                // about to vacate their tiles.
+                const selectedIds = new Set();
+                units.forEach(u => selectedIds.add(u.id));
+
+                // Pick one walkable destination per selected unit, fanning
+                // outward from the clicked tile. With more than one unit
+                // this prevents them all targeting the same tile and then
+                // queueing/giving up due to collision.
+                const destinations = self.findSpreadDestinations(
+                    clickedRow, clickedCol, units.length, selectedIds);
+
+                // Greedy nearest assignment: each unit gets the closest
+                // remaining destination to its current tile.
+                const remaining = destinations.slice();
+                const unitList = Array.prototype.slice.call(units);
+                const assignments = [];
+                unitList.forEach(currentUnit => {
+                    const ur = Math.round(currentUnit.offsetTop / 16);
+                    const uc = Math.round(currentUnit.offsetLeft / 16);
+                    let bestIdx = -1;
+                    let bestDist = Infinity;
+                    for (let i = 0; i < remaining.length; i++) {
+                        const d = remaining[i];
+                        const dr = d.row - ur;
+                        const dc = d.col - uc;
+                        const dist = dr * dr + dc * dc;
+                        if (dist < bestDist) {
+                            bestDist = dist;
+                            bestIdx = i;
+                        }
+                    }
+                    let dest;
+                    if (bestIdx === -1) {
+                        // No spread tile available — fall back to the
+                        // clicked tile so A* (closest:true) still routes
+                        // the unit somewhere sensible.
+                        dest = { row: clickedRow, col: clickedCol };
+                    } else {
+                        dest = remaining.splice(bestIdx, 1)[0];
+                    }
+                    assignments.push({ unit: currentUnit, dest: dest });
+                });
+
+                assignments.forEach(a => {
+                    const currentUnit = a.unit;
                     let unitX = $(currentUnit).offset().left / 16;
                     let unitY =  $(currentUnit).offset().top / 16;
                     let gridItem = document.getElementById('cell_' + unitX + '_' + unitY);
@@ -263,7 +327,8 @@ GraphSearch.prototype.initialize = function() {
                         gridItem.classList.add('start');
                     }
 
-                    let path = self.nodeToNode(self.nodeFromUnit(currentUnit), $(this));
+                    let path = self.nodeToCoord(
+                        self.nodeFromUnit(currentUnit), a.dest.row, a.dest.col);
 
                     moves.push({
                         'path' : path,
@@ -273,6 +338,17 @@ GraphSearch.prototype.initialize = function() {
 
                 for (let moveX = 0; moveX < moves.length; moveX++) {
                     const move = moves[moveX];
+                    // A direct move order cancels any in-progress harvest loop.
+                    if (window.RTS && window.RTS.Harvest) {
+                        window.RTS.Harvest.cancelFor(move.currentUnit);
+                    }
+                    $(move.currentUnit).stop(true, false);
+                    // The animate-stop above clears the queued setIdle, so
+                    // explicitly stop the sprite frame timer too. It will be
+                    // restarted immediately by `moveUnit`'s start callback.
+                    if (window.RTS && window.RTS.Sprite) {
+                        window.RTS.Sprite.stop(move.currentUnit);
+                    }
                     moveUnit(move.path, move.currentUnit);
                 }
 
@@ -337,6 +413,148 @@ GraphSearch.prototype.initialize = function() {
 };
 
 /**
+ * Path from `start` to a tile identified by (row, col). Used by the
+ * group-move handler so each selected unit can be routed to its own
+ * spread destination without needing a jQuery cell element per target.
+ *
+ * Returns the A* path or `false` if no path could be found.
+ */
+GraphSearch.prototype.nodeToCoord = function(start, row, col) {
+    if (!this.graph || !this.graph.grid[row] || !this.graph.grid[row][col]) {
+        return false;
+    }
+    const end = this.graph.grid[row][col];
+    const path = this.search(this.graph, start, end, {
+        closest: this.opts.closest,
+    });
+    if (!path || path.length === 0) {
+        return false;
+    }
+    return path;
+};
+
+/**
+ * Like `nodeToCoord`, but treats every tile in `blockedTiles` (an array of
+ * `{row, col}`) as a temporary wall for the duration of the search. Used by
+ * the movement code to re-route around units that are sitting in our way:
+ * the blocking peasant's current tile is added to `blockedTiles`, A* finds
+ * a fresh path that goes around it, then the original tile weights are
+ * restored before this function returns.
+ *
+ * The start and destination tiles are never walled off (the unit is
+ * standing on the start, and we want A* — with `closest: true` — to be
+ * able to reach the original destination or its nearest reachable tile).
+ *
+ * Returns the path or `false` if no usable path was found.
+ */
+GraphSearch.prototype.findPathAvoiding = function(startRow, startCol, endRow, endCol, blockedTiles) {
+    if (!this.graph || !this.graph.grid[startRow] || !this.graph.grid[startRow][startCol]) {
+        return false;
+    }
+    if (!this.graph.grid[endRow] || !this.graph.grid[endRow][endCol]) {
+        return false;
+    }
+
+    const restored = [];
+    if (blockedTiles && blockedTiles.length) {
+        for (let i = 0; i < blockedTiles.length; i++) {
+            const tile = blockedTiles[i];
+            const row = this.graph.grid[tile.row];
+            const node = row ? row[tile.col] : null;
+            if (!node) continue;
+            // Don't wall off endpoints — see function docstring.
+            if (tile.row === startRow && tile.col === startCol) continue;
+            if (tile.row === endRow && tile.col === endCol) continue;
+            // Already a wall — nothing to restore.
+            if (node.weight === 0) continue;
+            restored.push({ node: node, weight: node.weight });
+            node.weight = 0;
+        }
+    }
+
+    const start = this.graph.grid[startRow][startCol];
+    const end = this.graph.grid[endRow][endCol];
+    let path;
+    try {
+        path = this.search(this.graph, start, end, {
+            closest: this.opts.closest,
+        });
+    } finally {
+        for (let i = 0; i < restored.length; i++) {
+            restored[i].node.weight = restored[i].weight;
+        }
+    }
+
+    if (!path || path.length === 0) return false;
+    return path;
+};
+
+/**
+ * Pick up to `count` walkable tiles fanning outward from (centerRow,
+ * centerCol). Used to spread a group move so peasants don't all target
+ * the same tile and then queue / give up on collision.
+ *
+ * Skips wall tiles and tiles currently occupied by peasants whose IDs
+ * are NOT in `ignoreUnitIds` (the units being moved are about to vacate
+ * their tiles, so they shouldn't be treated as obstacles).
+ */
+GraphSearch.prototype.findSpreadDestinations = function(centerRow, centerCol, count, ignoreUnitIds) {
+    const results = [];
+    if (count <= 0) return results;
+
+    const Coll = window.RTS && window.RTS.Collision;
+    const ignore = ignoreUnitIds || new Set();
+
+    // Snapshot current peasant tiles so we don't requery the DOM for
+    // every candidate tile.
+    const blockedTiles = new Set();
+    const peasants = document.querySelectorAll('.peasant');
+    for (let i = 0; i < peasants.length; i++) {
+        const p = peasants[i];
+        if (ignore.has(p.id)) continue;
+        if (!p.isConnected) continue;
+        // Mining peasants are tucked inside the gold mine and don't
+        // physically block the perimeter tile.
+        if (p.classList.contains('peasant-mining')) continue;
+        const t = Coll ? Coll.tileOf(p) : null;
+        if (t) blockedTiles.add(t.row + ',' + t.col);
+    }
+
+    const visited = new Set();
+    const queue = [{ row: centerRow, col: centerCol }];
+    visited.add(centerRow + ',' + centerCol);
+
+    const dirs = [
+        [-1, 0], [1, 0], [0, -1], [0, 1],
+        [-1, -1], [-1, 1], [1, -1], [1, 1],
+    ];
+
+    // Cap the search so a click into a fully-walled region doesn't
+    // wander the entire map.
+    const MAX_VISITED = 600;
+
+    while (queue.length && results.length < count && visited.size <= MAX_VISITED) {
+        const cur = queue.shift();
+        if (this.isWalkable(cur.row, cur.col) &&
+            !blockedTiles.has(cur.row + ',' + cur.col)) {
+            results.push(cur);
+        }
+        for (let d = 0; d < dirs.length; d++) {
+            const nr = cur.row + dirs[d][0];
+            const nc = cur.col + dirs[d][1];
+            if (nr < 0 || nc < 0) continue;
+            if (!this.graph || !this.graph.grid[nr] || !this.graph.grid[nr][nc]) continue;
+            const k = nr + ',' + nc;
+            if (visited.has(k)) continue;
+            visited.add(k);
+            queue.push({ row: nr, col: nc });
+        }
+    }
+
+    return results;
+};
+
+/**
  * @param {*} $end
  *
  * @returns void
@@ -372,6 +590,31 @@ GraphSearch.prototype.cellClicked = function($end) {
         this.drawDebugInfo();
         this.animatePath(path);
     }
+};
+
+/**
+ * Mark a tile as a wall (or clear it) and update the path-finding graph.
+ * row/col follow the grid id convention `cell_<row>_<col>` and graph.grid[row][col].
+ */
+GraphSearch.prototype.setWall = function(row, col, isWall) {
+    if (!this.graph || !this.graph.grid[row] || !this.graph.grid[row][col]) {
+        return;
+    }
+    var node = this.graph.grid[row][col];
+    node.weight = isWall ? 0 : 1;
+    var $cell = $('#cell_' + row + '_' + col);
+    if (isWall) {
+        $cell.addClass(css.wall);
+    } else {
+        $cell.removeClass(css.wall);
+    }
+};
+
+GraphSearch.prototype.isWalkable = function(row, col) {
+    if (!this.graph || !this.graph.grid[row] || !this.graph.grid[row][col]) {
+        return false;
+    }
+    return this.graph.grid[row][col].weight !== 0;
 };
 
 GraphSearch.prototype.drawDebugInfo = function() {

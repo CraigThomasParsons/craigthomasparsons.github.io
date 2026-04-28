@@ -97,6 +97,13 @@ function onSelectMouseDown(clickEvent, debug) {
     // Try to prevent default behavior, so it doesn't try to drag images.
     clickEvent.preventDefault ? clickEvent.preventDefault() : clickEvent.returnValue = false;
 
+    // If the building system wants to handle this click (placement mode), let it.
+    if (window.RTS && window.RTS.Building && window.RTS.Building.handleMouseDown) {
+        if (window.RTS.Building.handleMouseDown(clickEvent)) {
+            return false;
+        }
+    }
+
     let selectIndicator = document.getElementById('selectIndicator');
 
     if (selectIndicator === null) {

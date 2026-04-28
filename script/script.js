@@ -4,8 +4,8 @@ var hero = {
 }
 
 let cameraStart = {
-    top: 760,
-    left: 120
+    top: 700,
+    left: 0
 }
 
 let cameraMoving = false;
@@ -189,35 +189,217 @@ function moveHero(left, top) {
  }
 
 /**
- * @param {*} path
- * @param {*} unit
+ * Per-segment animation step callback: keep the green selection outline
+ * pinned on top of the moving unit.
+ */
+function _moveUnitStepFn(unit) {
+    return function(now, fx) {
+        let $unit = $(fx.elem);
+        let selectedIndicators = document.getElementsByName(unit.getAttribute('id'));
+        for (let index = 0; index < selectedIndicators.length; index++) {
+            if (selectedIndicators[index].style === undefined) {
+                selectedIndicators[index].style = {};
+            }
+            selectedIndicators[index].style.left = $unit.offset().left + 'px';
+            selectedIndicators[index].style.top = $unit.offset().top + 'px';
+        }
+    };
+}
+
+/**
+ * Walk `unit` along `path` one tile at a time. The segments are NOT
+ * pre-queued: each `_walkSegment` call enqueues only its own animation
+ * plus a single follow-up queue entry that triggers the next segment.
+ * That guarantees occupancy checks, reservations, and `Sprite.setMoving`
+ * for tile N+1 only run after the animation onto tile N has completed.
+ *
+ * Path entries use x = row, y = column (matches the A* graph indexing).
  */
 function moveUnit(path, unit) {
+    if (!path || !path.length || !unit) return;
 
-    for (let nodeNumber = 0; nodeNumber < path.length; nodeNumber++) {
-        const coord = path[nodeNumber];
-        let toTop = (coord.x * 16);
-        let toLeft = (coord.y * 16);
+    const Coll = window.RTS && window.RTS.Collision;
+    // A previous order may have been cancelled via `$(unit).stop(true)`
+    // which clears the queued cleanup — drop any stale reservation now so
+    // it doesn't permanently block the tile for other units.
+    if (Coll) Coll.clear(unit);
+    const sessionId = Coll ? Coll.newSession(unit) : 0;
 
-        $( unit ).animate({
+    // Kick off the first segment via the queue so it composes correctly
+    // with anything else already pending on the unit.
+    $(unit).queue(function(next) {
+        _walkSegment(unit, path, 0, sessionId, next, 0);
+    });
+}
+
+/**
+ * Run a single tile of the path. Strictly sequential: this fn is the
+ * currently-dequeued queue entry, so it owns the "inprogress" sentinel
+ * until it calls `next()`. We:
+ *   1. Check occupancy of `path[i]`. If blocked, wait & retry, eventually
+ *      bailing the whole path so the player can re-issue.
+ *   2. Reserve the tile, switch the sprite to its walk frames, and queue
+ *      the jQuery animate for that one tile.
+ *   3. Queue the next segment behind the animate, so when the animate
+ *      finishes the queue advances to `_walkSegment(i+1)` which performs
+ *      its own occupancy check at *that* moment.
+ *   4. Call `next()` to let the animate (and only the animate) start.
+ */
+function _walkSegment(unit, path, i, sessionId, next, reroutesDone) {
+    const Coll = window.RTS && window.RTS.Collision;
+    const Sprite = window.RTS && window.RTS.Sprite;
+    reroutesDone = reroutesDone || 0;
+
+    // A newer movement order has superseded ours — exit silently. Don't
+    // call next(): if our queue was cleared by `$(unit).stop(true, false)`
+    // before a new walk started, dequeue would advance the new walk's
+    // queue. (In practice queued segments are only ever invoked while
+    // their session is current, but check defensively.)
+    if (Coll && !Coll.isSessionCurrent(unit, sessionId)) {
+        return;
+    }
+
+    // End of path: settle into the still pose and release the tile-ahead
+    // reservation, then close out the queue so `.promise().done()` fires.
+    if (i >= path.length) {
+        if (Sprite) Sprite.setIdle(unit);
+        if (Coll) Coll.clear(unit);
+        next();
+        return;
+    }
+
+    const coord = path[i];
+    const toRow = coord.x;
+    const toCol = coord.y;
+    const toTop = toRow * 16;
+    const toLeft = toCol * 16;
+
+    const WAIT_MS = 150;
+    // Once the next tile has been blocked for this many consecutive
+    // retries (~0.9s) we try to re-route around the obstruction instead
+    // of waiting for it to clear. After the first reroute attempt we
+    // only re-attempt every REROUTE_COOLDOWN retries so a dense jam
+    // doesn't trigger an A* search every 150ms.
+    const RETRIES_BEFORE_REROUTE = 6;
+    const REROUTE_COOLDOWN = 6;
+    const MAX_RETRIES = 30; // ~4.5s ceiling before truly giving up
+    const MAX_REROUTES = 4; // hard cap on per-order replans
+
+    let retries = 0;
+
+    // Build an A* path from our current tile to the original destination,
+    // walling off the tiles every other peasant is currently standing on.
+    // Returns the new path or null if no replan is possible/useful.
+    function tryReroute() {
+        const grid = window.RTS && window.RTS.gridSearch;
+        if (!grid || typeof grid.findPathAvoiding !== 'function') return null;
+
+        const curRow = Math.round(unit.offsetTop / 16);
+        const curCol = Math.round(unit.offsetLeft / 16);
+        const destNode = path[path.length - 1];
+        if (!destNode) return null;
+        const destRow = destNode.x;
+        const destCol = destNode.y;
+
+        // Already at the destination — nothing to plan around.
+        if (curRow === destRow && curCol === destCol) return null;
+
+        // Snapshot the current tiles of every other peasant. Mining
+        // peasants are tucked inside the gold mine and don't physically
+        // block movement, so they're skipped (matches `isOccupied`).
+        const blocked = [];
+        const peasants = document.querySelectorAll('.peasant');
+        for (let p = 0; p < peasants.length; p++) {
+            const u = peasants[p];
+            if (u === unit) continue;
+            if (!u.isConnected) continue;
+            if (u.classList.contains('peasant-mining')) continue;
+            const r = Math.round(u.offsetTop / 16);
+            const c = Math.round(u.offsetLeft / 16);
+            blocked.push({ row: r, col: c });
+        }
+
+        const newPath = grid.findPathAvoiding(curRow, curCol, destRow, destCol, blocked);
+        if (!newPath || newPath.length === 0) return null;
+
+        // If the freshly-planned next tile is the same blocked tile we've
+        // been waiting on, the replan didn't actually find a way around
+        // (A* fell back to the same corridor). Treat as "no useful
+        // reroute" so we keep waiting instead of looping immediately.
+        if (newPath[0] && newPath[0].x === toRow && newPath[0].y === toCol) {
+            return null;
+        }
+        return newPath;
+    }
+
+    function attempt() {
+        // Stale: a newer movement order has cleared our queue (via
+        // `$(unit).stop(true, false)`). Do NOT call next() here — calling
+        // dequeue would advance the *new* walk's queue and corrupt it.
+        if (Coll && !Coll.isSessionCurrent(unit, sessionId)) {
+            return;
+        }
+        if (Coll && Coll.isOccupied(toRow, toCol, unit)) {
+            retries++;
+
+            // After a few retries of waiting on the same blocker, ask A*
+            // for a fresh path that goes around it. Restart this same
+            // queue entry (`next`) on the new path so the surrounding
+            // queue plumbing still flows correctly. The modulo check
+            // throttles repeated A* calls in dense jams (attempts at
+            // retries 6, 12, 18, 24, 30 with the defaults).
+            const sinceThreshold = retries - RETRIES_BEFORE_REROUTE;
+            const reroutable = retries >= RETRIES_BEFORE_REROUTE
+                && reroutesDone < MAX_REROUTES
+                && sinceThreshold % REROUTE_COOLDOWN === 0;
+            if (reroutable) {
+                const newPath = tryReroute();
+                if (newPath) {
+                    if (Coll) Coll.clear(unit);
+                    if (Sprite) Sprite.setIdle(unit);
+                    _walkSegment(unit, newPath, 0, sessionId, next, reroutesDone + 1);
+                    return;
+                }
+            }
+
+            if (retries > MAX_RETRIES) {
+                if (Sprite) Sprite.setIdle(unit);
+                if (Coll) Coll.clear(unit);
+                next();
+                return;
+            }
+            if (Sprite) Sprite.setIdle(unit);
+            setTimeout(attempt, WAIT_MS);
+            return;
+        }
+
+        // Tile is free — reserve it so no one else slips in while we walk.
+        if (Coll) Coll.reserve(unit, toRow, toCol);
+        if (Sprite) {
+            Sprite.setMoving(unit, unit.offsetLeft, unit.offsetTop, toLeft, toTop);
+        }
+
+        // Queue the animate for THIS tile, then the trigger for the next
+        // tile. Calling next() removes our "inprogress" sentinel so the
+        // animate starts; when it finishes, the queue advances to the
+        // next-segment trigger which will dequeue _walkSegment(i+1).
+        $(unit).animate({
             left: toLeft,
             top: toTop,
         }, {
             duration: 1000,
-            easing: "linear",
-            step: function( now, fx ) {
-                let $unit = $( fx.elem );
-                let selectedIndicators = document.getElementsByName(unit.getAttribute('id'));
-                for (let index = 0; index < selectedIndicators.length; index++) {
-                    if (selectedIndicators[index].style === undefined) {
-                        selectedIndicators[index].style = {};
-                    }
-                    selectedIndicators[index].style.left = $unit.offset().left + 'px';
-                    selectedIndicators[index].style.top = $unit.offset().top + 'px';
-                }
-            }
+            easing: 'linear',
+            step: _moveUnitStepFn(unit),
         });
+
+        $(unit).queue(function(nextSeg) {
+            _walkSegment(unit, path, i + 1, sessionId, nextSeg, reroutesDone);
+        });
+
+        next();
     }
+
+    attempt();
 }
 
 /**
@@ -314,7 +496,7 @@ function cameraControls()
         window.scrollTo({
             top: cameraStart.top,
             left: cameraStart.left,
-            behavior: 'smooth'
+            behavior: 'auto'
         });
     }
 }
@@ -337,7 +519,7 @@ camera();
 
 $(document).ready(function() {
 
-    setTimeout(waitForCameraStart, 1000);
+    setTimeout(waitForCameraStart, 50);
 
     // Only for the peasants we start with, will need to create new peasants at some point and add onclick event on creation.
     const peasants = document.querySelectorAll('.peasant');

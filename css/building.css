@@ -1,0 +1,146 @@
+/* Build toolbar — appears when a peasant is selected. */
+.build-toolbar {
+    position: fixed;
+    left: 12px;
+    bottom: 50px; /* clear the slim bottom HUD bar */
+    z-index: 50;
+    background: rgba(20, 20, 20, 0.92);
+    border: 2px solid #6a4f1a;
+    border-radius: 6px;
+    padding: 8px;
+    display: flex;
+    flex-wrap: wrap;
+    align-items: center;
+    gap: 6px;
+    max-width: 360px;
+    color: #f3e2b1;
+    font-family: "Helvetica Neue", Helvetica, Arial, sans-serif;
+    font-size: 12px;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.6);
+    transition: opacity 0.15s ease;
+}
+
+.build-toolbar-hidden {
+    opacity: 0;
+    pointer-events: none;
+}
+
+.build-toolbar-label {
+    font-weight: bold;
+    color: #f3e2b1;
+    margin-right: 4px;
+    text-transform: uppercase;
+    letter-spacing: 0.5px;
+    font-size: 11px;
+}
+
+.build-btn {
+    width: 48px;
+    height: 48px;
+    background-color: #2a2a2a;
+    background-repeat: no-repeat;
+    background-position: center;
+    background-size: 80% 80%;
+    border: 1px solid #6a4f1a;
+    border-radius: 4px;
+    cursor: pointer;
+    position: relative;
+    padding: 0;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+}
+
+.build-btn:hover {
+    border-color: #f3c14b;
+    box-shadow: 0 0 6px rgba(243, 193, 75, 0.6);
+}
+
+.build-btn span {
+    position: absolute;
+    bottom: -2px;
+    left: 0;
+    right: 0;
+    font-size: 9px;
+    background: rgba(0, 0, 0, 0.7);
+    color: #f3e2b1;
+    padding: 1px 2px;
+    line-height: 10px;
+    text-align: center;
+    border-radius: 0 0 3px 3px;
+    pointer-events: none;
+}
+
+.build-btn-cancel {
+    width: auto;
+    height: 32px;
+    background-image: none;
+    color: #f3e2b1;
+    padding: 0 10px;
+    font-size: 11px;
+}
+
+/* Ghost building shown during placement. */
+.building-ghost {
+    position: absolute;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    z-index: 4;
+    opacity: 0.65;
+    pointer-events: none;
+    box-sizing: border-box;
+    border: 2px solid transparent;
+}
+
+.building-ghost-valid {
+    border-color: rgba(40, 200, 40, 0.9);
+    box-shadow: 0 0 0 2px rgba(40, 200, 40, 0.4) inset;
+}
+
+.building-ghost-invalid {
+    border-color: rgba(220, 40, 40, 0.9);
+    box-shadow: 0 0 0 2px rgba(220, 40, 40, 0.4) inset;
+    filter: grayscale(0.6);
+}
+
+/* Placed buildings. */
+.building {
+    position: absolute;
+    background-repeat: no-repeat;
+    background-size: 100% 100%;
+    image-rendering: pixelated;
+    image-rendering: -moz-crisp-edges;
+    z-index: 2;
+}
+
+.building-construction {
+    /* Subtle pulse so it's clear it's still being built. */
+    animation: building-pulse 1.2s ease-in-out infinite;
+}
+
+@keyframes building-pulse {
+    0%, 100% { filter: brightness(1.0); }
+    50%      { filter: brightness(1.25); }
+}
+
+.building-complete {
+    animation: building-pop 0.4s ease-out;
+}
+
+/* A building can be selected (mouse-click) like a unit. */
+.building-clickable {
+    cursor: pointer;
+}
+
+.building-selected {
+    outline: 2px solid #f3c14b;
+    outline-offset: -2px;
+    box-shadow: 0 0 8px rgba(243, 193, 75, 0.65);
+}
+
+@keyframes building-pop {
+    0%   { transform: scale(0.92); }
+    60%  { transform: scale(1.04); }
+    100% { transform: scale(1.0); }
+}
